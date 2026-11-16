@@ -20,7 +20,11 @@ export class JwtAuthGuard implements CanActivate {
     if (!token || !process.env.JWT_SECRET) throw new UnauthorizedException('Authentication required');
 
     let claims: any;
-    try { claims = verify(token, process.env.JWT_SECRET); } catch { throw new UnauthorizedException('Invalid or expired token'); }
+    try {
+      claims = verify(token, process.env.JWT_SECRET);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired token');
+    }
 
     const result = await this.db.query(
       `SELECT u.id, u.org_id, u.email,
