@@ -37,7 +37,7 @@ async function bootstrap() {
       transform: true,
       transformOptions: { enableImplicitConversion: true },
       forbidUnknownValues: true,
-    })
+    }),
   );
 
   if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
