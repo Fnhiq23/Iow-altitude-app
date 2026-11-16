@@ -1,26 +1,91 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  IsIn,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 import { Actor, JwtAuthGuard, Roles } from './security';
 import { ResourcesService } from './resources.service';
 
 class BaseResourceDto {
-  @IsOptional() @IsString() @MaxLength(255) title?: string;
-  @IsOptional() @IsString() @MaxLength(100) mission_type?: string;
-  @IsOptional() @IsString() @MaxLength(50) priority?: string;
-  @IsOptional() @IsString() planned_start_at?: string;
-  @IsOptional() @IsString() planned_end_at?: string;
-  @IsOptional() @IsString() location_text?: string;
-  @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsUUID() assignee_id?: string;
-  @IsOptional() @IsUUID() asset_id?: string;
-  @IsOptional() @IsIn(['available', 'in_use', 'maintenance', 'broken', 'retired']) status?: string;
-  @IsOptional() @IsString() asset_type?: string;
-  @IsOptional() @IsString() model?: string;
-  @IsOptional() @IsString() serial_number?: string;
-  @IsOptional() @IsIn(['low', 'medium', 'high', 'critical']) severity?: string;
-  @IsOptional() @IsString() type?: string;
-  @IsOptional() @IsString() incident_type?: string;
-  @IsOptional() @IsString() incident_status?: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  mission_type?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  priority?: string;
+
+  @IsOptional()
+  @IsString()
+  planned_start_at?: string;
+
+  @IsOptional()
+  @IsString()
+  planned_end_at?: string;
+
+  @IsOptional()
+  @IsString()
+  location_text?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsUUID()
+  assignee_id?: string;
+
+  @IsOptional()
+  @IsUUID()
+  asset_id?: string;
+
+  @IsOptional()
+  @IsIn(['available', 'in_use', 'maintenance', 'broken', 'retired'])
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  asset_type?: string;
+
+  @IsOptional()
+  @IsString()
+  model?: string;
+
+  @IsOptional()
+  @IsString()
+  serial_number?: string;
+
+  @IsOptional()
+  @IsIn(['low', 'medium', 'high', 'critical'])
+  severity?: string;
+
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @IsOptional()
+  @IsString()
+  incident_type?: string;
 }
 
 @UseGuards(JwtAuthGuard)
@@ -30,29 +95,37 @@ export class MissionsController {
 
   @Get()
   list(@Req() req: { actor: Actor }, @Query('status') status?: string) {
-    return this.service.list('missions', req.actor, status);
+    return this.service.list(req.actor, 'missions', status);
   }
 
   @Get(':id')
   get(@Req() req: { actor: Actor }, @Param('id') id: string) {
-    return this.service.get('missions', req.actor, id);
+    return this.service.get(req.actor, 'missions', id);
   }
 
   @Roles('org_admin', 'manager', 'operator')
   @Post()
   create(@Req() req: { actor: Actor }, @Body() dto: BaseResourceDto) {
-    return this.service.create('missions', req.actor, dto);
+    return this.service.create(req.actor, 'missions', dto as Record<string, unknown>);
   }
 
   @Roles('org_admin', 'manager', 'operator')
   @Patch(':id')
-  update(@Req() req: { actor: Actor }, @Param('id') id: string, @Body() dto: BaseResourceDto) {
-    return this.service.update('missions', req.actor, id, dto as Record<string, any>);
+  update(
+    @Req() req: { actor: Actor },
+    @Param('id') id: string,
+    @Body() dto: BaseResourceDto,
+  ) {
+    return this.service.update(req.actor, 'missions', id, dto as Record<string, unknown>);
   }
 
   @Roles('org_admin', 'manager', 'operator')
   @Post(':id/status')
-  transition(@Req() req: { actor: Actor }, @Param('id') id: string, @Body('status') status: string) {
+  transition(
+    @Req() req: { actor: Actor },
+    @Param('id') id: string,
+    @Body('status') status: string,
+  ) {
     return this.service.transitionMission(req.actor, id, status);
   }
 }
@@ -64,30 +137,28 @@ export class AssetsController {
 
   @Get()
   list(@Req() req: { actor: Actor }, @Query('status') status?: string) {
-    return this.service.list('assets', req.actor, status);
+    return this.service.list(req.actor, 'assets', status);
   }
 
   @Get(':id')
   get(@Req() req: { actor: Actor }, @Param('id') id: string) {
-    return this.service.get('assets', req.actor, id);
+    return this.service.get(req.actor, 'assets', id);
   }
 
   @Roles('org_admin', 'manager', 'operator')
   @Post()
   create(@Req() req: { actor: Actor }, @Body() dto: BaseResourceDto) {
-    return this.service.create('assets', req.actor, dto as Record<string, any>);
+    return this.service.create(req.actor, 'assets', dto as Record<string, unknown>);
   }
 
   @Roles('org_admin', 'manager', 'operator')
   @Patch(':id')
-  update(@Req() req: { actor: Actor }, @Param('id') id: string, @Body() dto: BaseResourceDto) {
-    return this.service.update('assets', req.actor, id, dto as Record<string, any>);
-  }
-
-  @Roles('org_admin', 'manager', 'operator')
-  @Post(':id/maintenance')
-  maintenance(@Req() req: { actor: Actor }, @Param('id') id: string, @Body() payload: { maintenance_type: string; note: string }) {
-    return this.service.maintenance(req.actor, id, payload);
+  update(
+    @Req() req: { actor: Actor },
+    @Param('id') id: string,
+    @Body() dto: BaseResourceDto,
+  ) {
+    return this.service.update(req.actor, 'assets', id, dto as Record<string, unknown>);
   }
 }
 
@@ -98,24 +169,28 @@ export class IncidentsController {
 
   @Get()
   list(@Req() req: { actor: Actor }, @Query('status') status?: string) {
-    return this.service.list('incidents', req.actor, status);
+    return this.service.list(req.actor, 'incidents', status);
   }
 
   @Get(':id')
   get(@Req() req: { actor: Actor }, @Param('id') id: string) {
-    return this.service.get('incidents', req.actor, id);
+    return this.service.get(req.actor, 'incidents', id);
   }
 
   @Roles('org_admin', 'manager', 'operator')
   @Post()
   create(@Req() req: { actor: Actor }, @Body() dto: BaseResourceDto) {
-    return this.service.create('incidents', req.actor, dto as Record<string, any>);
+    return this.service.create(req.actor, 'incidents', dto as Record<string, unknown>);
   }
 
   @Roles('org_admin', 'manager', 'operator')
   @Patch(':id')
-  update(@Req() req: { actor: Actor }, @Param('id') id: string, @Body() dto: BaseResourceDto) {
-    return this.service.update('incidents', req.actor, id, dto as Record<string, any>);
+  update(
+    @Req() req: { actor: Actor },
+    @Param('id') id: string,
+    @Body() dto: BaseResourceDto,
+  ) {
+    return this.service.update(req.actor, 'incidents', id, dto as Record<string, unknown>);
   }
 }
 
@@ -126,7 +201,11 @@ export class AuditController {
 
   @Roles('org_admin', 'auditor')
   @Get()
-  list(@Req() req: { actor: Actor }, @Query('entityType') entityType?: string, @Query('entityId') entityId?: string) {
+  list(
+    @Req() req: { actor: Actor },
+    @Query('entityType') entityType?: string,
+    @Query('entityId') entityId?: string,
+  ) {
     return this.service.audit(req.actor, entityType, entityId);
   }
 }
