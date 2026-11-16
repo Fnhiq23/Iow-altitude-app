@@ -1,15 +1,22 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { compare, hash } from 'bcryptjs';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { compare, hash, genSalt } from 'bcryptjs';
 import { sign } from 'jsonwebtoken';
 import { Database } from './database';
 
 const JWT_ISSUER = 'iow-altitude-app';
 const JWT_AUDIENCE = 'iow-altitude-api';
-const BOOTSTRAP_LOCK_ID = 73190421;
 
 @Injectable()
 export class AuthService {
   constructor(private readonly db: Database) {}
+
+  private getJwtSecret() {
+    const secret = process.env.JWT_SECRET;
+    if (!secret || secret.length < 32) {
+      throw new Error('JWT_SECRET must be set to at least 32 characters');
+    }
+    return secret;
+  }
 
   async login(email: string, password: string) {
     const secret = this.getJwtSecret();
@@ -33,9 +40,8 @@ export class AuthService {
       { orgId: user.org_id, tokenUse: 'access' },
       secret,
       {
-        algorithm: 'HS256',
         subject: user.id,
-        expiresIn: process.env.JWT_TTL ?? '15m',
+        expiresIn: process.env.JWT_TTL ?? '8h',
         issuer: JWT_ISSUER,
         audience: JWT_AUDIENCE,
       },
@@ -60,15 +66,12 @@ export class AuthService {
     password: string;
     fullName: string;
   }) {
-    // Hash outside the transaction so the one-time setup lock is held briefly.
-    const passwordHash = await hash(dto.password, 12);
+    const passwordHash = await hash(dto.password, await genSalt(12));
+
     return this.db.transaction(async (client) => {
-      // Serialize concurrent first-run requests. A transaction-scoped lock is
-      // released automatically on commit or rollback.
-      await client.query('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK_ID]);
       const existing = await client.query('SELECT id FROM organizations LIMIT 1');
       if (existing.rowCount) {
-        throw new ConflictException('Bootstrap is only available before the first organization is created');
+        throw new Error('Bootstrap is only available before the first organization is created');
       }
 
       const org = await client.query(
@@ -95,13 +98,5 @@ export class AuthService {
         message: 'Bootstrap complete. Remove BOOTSTRAP_KEY after setup.',
       };
     });
-  }
-
-  private getJwtSecret(): string {
-    const secret = process.env.JWT_SECRET;
-    if (!secret || secret.length < 32) {
-      throw new Error('JWT_SECRET must be set to at least 32 characters');
-    }
-    return secret;
   }
 }

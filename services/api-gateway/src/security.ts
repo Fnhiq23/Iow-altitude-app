@@ -27,8 +27,6 @@ export class JwtAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const path = request.path ?? '';
 
-    // Allow public endpoints. In a production deployment these should be fully
-    // validated against the actual router prefix and API versioning scheme.
     if (path === '/api/health' || path === '/api/auth/login' || path === '/api/auth/bootstrap') {
       return true;
     }

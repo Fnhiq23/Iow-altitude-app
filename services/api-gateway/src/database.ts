@@ -27,7 +27,7 @@ export class Database implements OnModuleDestroy {
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Preserve the original transaction error.
+        // Ignore rollback errors in order to surface original cause.
       }
       throw error;
     } finally {
