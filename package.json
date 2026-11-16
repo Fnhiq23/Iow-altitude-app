@@ -1,0 +1,19 @@
+{
+  "name": "iow-altitude-app",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.12.3",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "pnpm --filter web-admin dev",
+    "dev:api": "pnpm --filter api-gateway start:dev",
+    "build:web": "pnpm --filter web-admin build",
+    "build:api": "pnpm --filter api-gateway build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test"
+  }
+}
