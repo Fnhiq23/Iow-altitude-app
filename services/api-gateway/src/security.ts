@@ -7,23 +7,40 @@ export const ROLES_KEY = 'allowed_roles';
 export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
 export interface Actor { id: string; orgId: string; email: string; roles: string[] }
 
+const JWT_ISSUER = 'iow-altitude-app';
+const JWT_AUDIENCE = 'iow-altitude-api';
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(private readonly db: Database, private readonly reflector: Reflector) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const path = request.path ?? '';
-    if (path === '/api/health' || path === '/api/auth/login' || path === '/api/auth/bootstrap') return true;
-
     const token = request.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
-    if (!token || !process.env.JWT_SECRET) throw new UnauthorizedException('Authentication required');
+    const secret = process.env.JWT_SECRET;
+    if (!token || !secret || secret.length < 32) {
+      throw new UnauthorizedException('Authentication required');
+    }
 
     let claims: any;
     try {
-      claims = verify(token, process.env.JWT_SECRET);
+      claims = verify(token, secret, {
+        algorithms: ['HS256'],
+        issuer: JWT_ISSUER,
+        audience: JWT_AUDIENCE,
+      });
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
+    }
+
+    if (
+      !claims ||
+      typeof claims !== 'object' ||
+      typeof claims.sub !== 'string' ||
+      typeof claims.orgId !== 'string' ||
+      claims.tokenUse !== 'access'
+    ) {
+      throw new UnauthorizedException('Invalid access token');
     }
 
     const result = await this.db.query(
@@ -34,7 +51,7 @@ export class JwtAuthGuard implements CanActivate {
        LEFT JOIN roles r ON r.id = ur.role_id AND r.org_id = u.org_id
        WHERE u.id = $1 AND u.org_id = $2 AND u.status = 'active'
        GROUP BY u.id`,
-      [claims.sub, claims.orgId]
+      [claims.sub, claims.orgId],
     );
 
     if (!result.rowCount) throw new UnauthorizedException('Account is inactive');

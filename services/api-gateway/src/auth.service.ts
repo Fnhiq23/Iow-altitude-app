@@ -3,15 +3,16 @@ import { compare, hash } from 'bcryptjs';
 import { sign } from 'jsonwebtoken';
 import { Database } from './database';
 
+const JWT_ISSUER = 'iow-altitude-app';
+const JWT_AUDIENCE = 'iow-altitude-api';
+const BOOTSTRAP_LOCK_ID = 73190421;
+
 @Injectable()
 export class AuthService {
   constructor(private readonly db: Database) {}
 
   async login(email: string, password: string) {
-    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
-      throw new Error('JWT_SECRET must be set to at least 32 characters');
-    }
-
+    const secret = this.getJwtSecret();
     const found = await this.db.query(
       `SELECT u.id, u.org_id, u.email, u.full_name, u.password_hash, u.status,
               COALESCE(array_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '{}') AS roles
@@ -20,7 +21,7 @@ export class AuthService {
        LEFT JOIN roles r ON r.id = ur.role_id AND r.org_id = u.org_id
        WHERE lower(u.email) = lower($1)
        GROUP BY u.id`,
-      [email]
+      [email],
     );
 
     const user = found.rows[0];
@@ -29,9 +30,15 @@ export class AuthService {
     }
 
     const accessToken = sign(
-      { orgId: user.org_id },
-      process.env.JWT_SECRET,
-      { subject: user.id, expiresIn: process.env.JWT_TTL ?? '8h', issuer: 'iow-altitude-app' }
+      { orgId: user.org_id, tokenUse: 'access' },
+      secret,
+      {
+        algorithm: 'HS256',
+        subject: user.id,
+        expiresIn: process.env.JWT_TTL ?? '15m',
+        issuer: JWT_ISSUER,
+        audience: JWT_AUDIENCE,
+      },
     );
 
     return {
@@ -46,32 +53,55 @@ export class AuthService {
     };
   }
 
-  async bootstrap(dto: { organizationName: string; slug: string; email: string; password: string; fullName: string }) {
-    const client = await (this.db as any).pool.connect();
-    try {
-      await client.query('BEGIN');
+  async bootstrap(dto: {
+    organizationName: string;
+    slug: string;
+    email: string;
+    password: string;
+    fullName: string;
+  }) {
+    // Hash outside the transaction so the one-time setup lock is held briefly.
+    const passwordHash = await hash(dto.password, 12);
+    return this.db.transaction(async (client) => {
+      // Serialize concurrent first-run requests. A transaction-scoped lock is
+      // released automatically on commit or rollback.
+      await client.query('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK_ID]);
       const existing = await client.query('SELECT id FROM organizations LIMIT 1');
-      if (existing.rowCount) throw new ConflictException('Bootstrap is only available before the first organization is created');
+      if (existing.rowCount) {
+        throw new ConflictException('Bootstrap is only available before the first organization is created');
+      }
 
-      const org = await client.query('INSERT INTO organizations(name, slug) VALUES($1, $2) RETURNING id', [dto.organizationName, dto.slug.toLowerCase()]);
-      const user = await client.query(
-        'INSERT INTO users(org_id, username, email, password_hash, full_name) VALUES($1, $2, lower($3), $4, $5) RETURNING id',
-        [org.rows[0].id, dto.email, dto.email, await hash(dto.password, 12), dto.fullName]
+      const org = await client.query(
+        'INSERT INTO organizations(name, slug) VALUES($1, $2) RETURNING id',
+        [dto.organizationName.trim(), dto.slug.trim().toLowerCase()],
       );
-      const role = await client.query("INSERT INTO roles(org_id, name, description) VALUES($1, 'org_admin', 'Organization administrator') RETURNING id", [org.rows[0].id]);
-      await client.query('INSERT INTO user_roles(user_id, role_id, org_id) VALUES($1, $2, $3)', [user.rows[0].id, role.rows[0].id, org.rows[0].id]);
+      const normalizedEmail = dto.email.trim().toLowerCase();
+      const user = await client.query(
+        'INSERT INTO users(org_id, username, email, password_hash, full_name) VALUES($1, $2, $3, $4, $5) RETURNING id',
+        [org.rows[0].id, normalizedEmail, normalizedEmail, passwordHash, dto.fullName.trim()],
+      );
+      const role = await client.query(
+        "INSERT INTO roles(org_id, name, description) VALUES($1, 'org_admin', 'Organization administrator') RETURNING id",
+        [org.rows[0].id],
+      );
+      await client.query(
+        'INSERT INTO user_roles(user_id, role_id, org_id) VALUES($1, $2, $3)',
+        [user.rows[0].id, role.rows[0].id, org.rows[0].id],
+      );
 
-      await client.query('COMMIT');
       return {
         organizationId: org.rows[0].id,
         userId: user.rows[0].id,
         message: 'Bootstrap complete. Remove BOOTSTRAP_KEY after setup.',
       };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+    });
+  }
+
+  private getJwtSecret(): string {
+    const secret = process.env.JWT_SECRET;
+    if (!secret || secret.length < 32) {
+      throw new Error('JWT_SECRET must be set to at least 32 characters');
     }
+    return secret;
   }
 }

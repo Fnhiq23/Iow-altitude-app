@@ -1,19 +1,42 @@
 import { Body, Controller, Get, Headers, Post, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { AuthService } from './auth.service';
 import { Actor, JwtAuthGuard } from './security';
 
 class LoginDto {
-  @IsEmail() email!: string;
-  @IsString() @MinLength(8) password!: string;
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
+
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  password!: string;
 }
 
 class BootstrapDto {
-  @IsNotEmpty() organizationName!: string;
-  @IsNotEmpty() slug!: string;
-  @IsEmail() email!: string;
-  @IsString() @MinLength(12) password!: string;
-  @IsNotEmpty() fullName!: string;
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  organizationName!: string;
+
+  @IsString()
+  @Matches(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,98}[a-zA-Z0-9]$/)
+  slug!: string;
+
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
+
+  @IsString()
+  @MinLength(12)
+  @MaxLength(128)
+  password!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  fullName!: string;
 }
 
 @Controller('auth')
