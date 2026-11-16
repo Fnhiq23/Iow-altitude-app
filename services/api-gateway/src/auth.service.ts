@@ -1,10 +1,11 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { compare, hash, genSalt } from 'bcryptjs';
 import { sign } from 'jsonwebtoken';
 import { Database } from './database';
 
 const JWT_ISSUER = 'iow-altitude-app';
 const JWT_AUDIENCE = 'iow-altitude-api';
+const BOOTSTRAP_LOCK_ID = 73190421;
 
 @Injectable()
 export class AuthService {
@@ -69,9 +70,13 @@ export class AuthService {
     const passwordHash = await hash(dto.password, await genSalt(12));
 
     return this.db.transaction(async (client) => {
+      // Serialize concurrent setup requests so only one first organization can be created.
+      await client.query('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK_ID]);
       const existing = await client.query('SELECT id FROM organizations LIMIT 1');
       if (existing.rowCount) {
-        throw new Error('Bootstrap is only available before the first organization is created');
+        throw new ConflictException(
+          'Bootstrap is only available before the first organization is created',
+        );
       }
 
       const org = await client.query(
