@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { PoolClient, QueryResultRow } from 'pg';
 import { Database } from './database';
 import type { Actor } from './security';
 
@@ -19,7 +20,6 @@ const RESOURCE_CONFIG: Record<ResourceKind, { table: string; fields: string[] }>
       'planned_end_at',
       'location_text',
       'assignee_id',
-      'status',
       'description',
     ],
   },
@@ -55,6 +55,7 @@ export class ResourcesService {
   constructor(private readonly db: Database) {}
 
   private async logAudit(
+    client: PoolClient,
     actor: Actor,
     action: string,
     entityType: ResourceKind,
@@ -62,7 +63,7 @@ export class ResourcesService {
     oldValue: unknown,
     newValue: unknown,
   ) {
-    await this.db.query(
+    await client.query(
       `INSERT INTO audit_logs (
         org_id, user_id, action, entity_type, entity_id,
         old_value_json, new_value_json, created_at
@@ -73,8 +74,8 @@ export class ResourcesService {
         action,
         entityType,
         entityId,
-        oldValue ? JSON.stringify(oldValue) : null,
-        newValue ? JSON.stringify(newValue) : null,
+        oldValue == null ? null : JSON.stringify(oldValue),
+        newValue == null ? null : JSON.stringify(newValue),
       ],
     );
   }
@@ -86,14 +87,13 @@ export class ResourcesService {
 
     if (status) {
       params.push(status);
-      where += ' AND status = $' + params.length;
+      where += ` AND status = $${params.length}`;
     }
 
     const result = await this.db.query(
       `SELECT * FROM ${table} WHERE ${where} ORDER BY created_at DESC LIMIT 200`,
       params,
     );
-
     return result.rows;
   }
 
@@ -104,104 +104,80 @@ export class ResourcesService {
       [actor.orgId, id],
     );
 
-    if (!result.rowCount) {
-      throw new NotFoundException('Record not found');
-    }
-
+    if (!result.rowCount) throw new NotFoundException('Record not found');
     return result.rows[0];
   }
 
-  async create(
-    actor: Actor,
-    kind: ResourceKind,
-    input: Record<string, unknown>,
-  ) {
+  async create(actor: Actor, kind: ResourceKind, input: Record<string, unknown>) {
     const config = RESOURCE_CONFIG[kind];
-    const columns: string[] = ['org_id'];
+    const columns = ['org_id'];
     const values: unknown[] = [actor.orgId];
-    const placeholders: string[] = ['$1'];
 
     for (const field of config.fields) {
       const value = input[field];
-      if (value === undefined) continue;
-      columns.push(field);
-      values.push(value);
-      placeholders.push(`$${values.length}`);
+      if (value !== undefined) {
+        columns.push(field);
+        values.push(value);
+      }
     }
 
     if (kind === 'missions') {
       columns.push('created_by');
       values.push(actor.id);
-      placeholders.push(`$${values.length}`);
-    }
-
-    if (kind === 'incidents') {
+    } else if (kind === 'incidents') {
       columns.push('reporter_id');
       values.push(actor.id);
-      placeholders.push(`$${values.length}`);
     }
 
     if (kind === 'missions' && input.status === undefined) {
       columns.push('status');
       values.push('draft');
-      placeholders.push(`$${values.length}`);
-    }
-
-    if (kind === 'incidents' && input.status === undefined) {
+    } else if (kind === 'incidents' && input.status === undefined) {
       columns.push('status');
       values.push('open');
-      placeholders.push(`$${values.length}`);
     }
 
-    const result = await this.db.query(
-      `INSERT INTO ${config.table} (${columns.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING *`,
-      values,
-    );
-
-    const created = result.rows[0];
-    await this.logAudit(actor, 'create', kind, created.id, null, created);
-    return created;
+    const placeholders = values.map((_, index) => `$${index + 1}`);
+    return this.db.transaction(async (client) => {
+      const result = await client.query<QueryResultRow>(
+        `INSERT INTO ${config.table} (${columns.join(', ')})
+         VALUES (${placeholders.join(', ')}) RETURNING *`,
+        values,
+      );
+      const created = result.rows[0];
+      await this.logAudit(client, actor, 'create', kind, created.id, null, created);
+      return created;
+    });
   }
 
-  async update(
-    actor: Actor,
-    kind: ResourceKind,
-    id: string,
-    input: Record<string, unknown>,
-  ) {
+  async update(actor: Actor, kind: ResourceKind, id: string, input: Record<string, unknown>) {
     const config = RESOURCE_CONFIG[kind];
-    const current = await this.get(actor, kind, id);
     const setFields = config.fields.filter((field) => input[field] !== undefined);
+    if (!setFields.length) throw new BadRequestException('No valid update field supplied');
 
-    if (!setFields.length) {
-      throw new BadRequestException('No valid update field supplied');
-    }
+    return this.db.transaction(async (client) => {
+      const current = await this.findForUpdate(client, actor, kind, id);
+      const values: unknown[] = [actor.orgId, id];
+      const assignments = setFields.map((field) => {
+        values.push(input[field]);
+        return `${field} = $${values.length}`;
+      });
+      assignments.push('updated_at = NOW()');
 
-    const values: unknown[] = [actor.orgId, id];
-    const assignments: string[] = [];
-
-    for (const field of setFields) {
-      values.push(input[field]);
-      assignments.push(`${field} = $${values.length}`);
-    }
-
-    assignments.push('updated_at = NOW()');
-
-    const result = await this.db.query(
-      `UPDATE ${config.table}
-       SET ${assignments.join(', ')}
-       WHERE org_id = $1 AND id = $2
-       RETURNING *`,
-      values,
-    );
-
-    const updated = result.rows[0];
-    await this.logAudit(actor, 'update', kind, id, current, updated);
-    return updated;
+      const result = await client.query<QueryResultRow>(
+        `UPDATE ${config.table}
+         SET ${assignments.join(', ')}
+         WHERE org_id = $1 AND id = $2
+         RETURNING *`,
+        values,
+      );
+      const updated = result.rows[0];
+      await this.logAudit(client, actor, 'update', kind, id, current, updated);
+      return updated;
+    });
   }
 
   async transitionMission(actor: Actor, id: string, nextStatus: string) {
-    const current = await this.get(actor, 'missions', id);
     const allowedMap: Record<string, string[]> = {
       draft: ['scheduled', 'canceled'],
       scheduled: ['in_progress', 'canceled'],
@@ -211,30 +187,31 @@ export class ResourcesService {
       canceled: [],
     };
 
-    if (!allowedMap[current.status]?.includes(nextStatus)) {
-      throw new BadRequestException(
-        `Cannot transition mission from ${current.status} to ${nextStatus}`,
+    return this.db.transaction(async (client) => {
+      const current = await this.findForUpdate(client, actor, 'missions', id);
+      if (!allowedMap[current.status]?.includes(nextStatus)) {
+        throw new BadRequestException(
+          `Cannot transition mission from ${current.status} to ${nextStatus}`,
+        );
+      }
+
+      const result = await client.query<QueryResultRow>(
+        `UPDATE missions SET status = $3, updated_at = NOW()
+         WHERE org_id = $1 AND id = $2 RETURNING *`,
+        [actor.orgId, id, nextStatus],
       );
-    }
-
-    const result = await this.db.query(
-      `UPDATE missions
-       SET status = $3, updated_at = NOW()
-       WHERE org_id = $1 AND id = $2
-       RETURNING *`,
-      [actor.orgId, id, nextStatus],
-    );
-
-    await this.logAudit(
-      actor,
-      'status_change',
-      'missions',
-      id,
-      { status: current.status },
-      { status: nextStatus },
-    );
-
-    return result.rows[0];
+      const updated = result.rows[0];
+      await this.logAudit(
+        client,
+        actor,
+        'status_change',
+        'missions',
+        id,
+        { status: current.status },
+        { status: nextStatus },
+      );
+      return updated;
+    });
   }
 
   async audit(actor: Actor, entityType?: string, entityId?: string) {
@@ -245,21 +222,30 @@ export class ResourcesService {
       params.push(entityType);
       where += ` AND entity_type = $${params.length}`;
     }
-
     if (entityId) {
       params.push(entityId);
       where += ` AND entity_id = $${params.length}`;
     }
 
     const result = await this.db.query(
-      `SELECT *
-       FROM audit_logs
-       WHERE ${where}
-       ORDER BY created_at DESC
-       LIMIT 200`,
+      `SELECT * FROM audit_logs WHERE ${where} ORDER BY created_at DESC LIMIT 200`,
       params,
     );
-
     return result.rows;
+  }
+
+  private async findForUpdate(
+    client: PoolClient,
+    actor: Actor,
+    kind: ResourceKind,
+    id: string,
+  ) {
+    const table = RESOURCE_CONFIG[kind].table;
+    const result = await client.query<QueryResultRow>(
+      `SELECT * FROM ${table} WHERE org_id = $1 AND id = $2 FOR UPDATE`,
+      [actor.orgId, id],
+    );
+    if (!result.rowCount) throw new NotFoundException('Record not found');
+    return result.rows[0];
   }
 }

@@ -1,17 +1,33 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
 import { AppModule } from './app.module';
+import { Database } from './database';
 
-describe('API auth flow', () => {
+const databaseMock = {
+  query: jest.fn(),
+  transaction: jest.fn(),
+  onModuleDestroy: jest.fn(),
+};
+
+describe('API auth and request validation (e2e)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    const moduleRef: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(Database)
+      .useValue(databaseMock)
+      .compile();
 
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api');
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        transform: true,
+        forbidNonWhitelisted: true,
+      }),
+    );
     await app.init();
   });
 
@@ -19,26 +35,18 @@ describe('API auth flow', () => {
     await app.close();
   });
 
-  it('should reject missing token for protected route', async () => {
-    const res = await app.getHttpServer().inject({
-      method: 'GET',
-      url: '/api/missions',
-    });
+  beforeEach(() => databaseMock.query.mockReset());
 
-    expect(res.statusCode).toBe(401);
+  it('rejects unauthenticated access to protected resources', async () => {
+    await request(app.getHttpServer()).get('/api/missions').expect(401);
+    expect(databaseMock.query).not.toHaveBeenCalled();
   });
 
-  it('should permit login with valid credentials shape', async () => {
-    const res = await app.getHttpServer().inject({
-      method: 'POST',
-      url: '/api/auth/login',
-      payload: {
-        email: 'admin@example.com',
-        password: 'password123',
-      },
-    });
-
-    // This remains a guardrail, not a live DB assertion. It validates the route contract.
-    expect([200, 201, 401, 500]).toContain(res.statusCode);
+  it('validates login input before reaching the database', async () => {
+    await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email: 'not-an-email', password: 'short' })
+      .expect(400);
+    expect(databaseMock.query).not.toHaveBeenCalled();
   });
 });
